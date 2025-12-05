@@ -451,6 +451,7 @@ app.patch('/admin/users/:id', authMiddleware, adminMiddleware, async (req, res) 
  */
 app.get('/user-info', authMiddleware, async (req, res) => {
   try {
+    console.log("Getting user info .........");
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
@@ -648,7 +649,25 @@ app.post('/rewards/surprise/claim', authMiddleware, async (req, res) => {
     const earliestAllowed = now - SURPRISE_GIFT_INTERVAL_MS;
     
     // Atomic check+update to avoid double-claim race conditions
-    const reward = randInt(SURPRISE_GIFT_MIN_COINS, SURPRISE_GIFT_MAX_COINS);
+    // const reward = randInt(SURPRISE_GIFT_MIN_COINS, SURPRISE_GIFT_MAX_COINS);
+    let reward;
+    const clientReward = req.body?.rewardCoins;
+
+    if (typeof clientReward !== 'undefined') {
+      // try to coerce to integer
+      const parsed = parseInt(clientReward, 10);
+      if (Number.isNaN(parsed)) {
+        return res.status(400).json({ message: 'Invalid reward value' });
+      }
+      // validate range
+      if (parsed < SURPRISE_GIFT_MIN_COINS || parsed > SURPRISE_GIFT_MAX_COINS) {
+        return res.status(400).json({ message: 'Reward out of allowed range' });
+      }
+      reward = parsed;
+    } else {
+      // fallback to server-generated (if client didn't send)
+      reward = randInt(SURPRISE_GIFT_MIN_COINS, SURPRISE_GIFT_MAX_COINS);
+    }
     
     const updated = await User.findOneAndUpdate(
       {
