@@ -1,0 +1,30 @@
+name: BTC Backend Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.BTC_DEPLOY_KEY }}
+
+      - name: Deploy to VPS
+        run: |
+          ssh -o StrictHostKeyChecking=no deploy@72.61.238.192 << 'EOF'
+          cd /home/deploy/btc_miner_simulator_backend || mkdir -p /home/deploy/btc_miner_simulator_backend
+          git fetch origin
+          git reset --hard origin/main
+          npm install --production
+          pm2 start ecosystem.config.js || pm2 restart btc-backend
+          pm2 save
+          EOF
