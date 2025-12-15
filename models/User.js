@@ -96,7 +96,10 @@ const userSchema = new Schema({
 
   // Daily bonus / chest info
   lastDailyBonusAt: { type: Date },               // used to gate daily bonus
-  dailyStreak: { type: Number, default: 0 },
+
+  // --- NEW FIELD FOR DAILY STREAK ---
+  dailyStreak: { type: Number, default: 1 },     // Current day in the 7-day cycle (0 for bonus, 1-7 for regular)
+  lastStreakClaimAt: { type: Date },              // When the daily streak reward was last claimed.
   
   // Surprise gift info (NEW)
   lastSurpriseGiftAt: { type: Number }, // ms since epoch

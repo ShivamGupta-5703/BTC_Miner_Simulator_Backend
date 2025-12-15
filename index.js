@@ -933,6 +933,128 @@ app.post('/rewards/refer/claim', authMiddleware, async (req, res) => {
 
 
 
+const DAILY_STREAK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const REGULAR_DAILY_REWARDS = [100, 200, 300, 400, 500, 600, 700]; // Days 1-7
+const BONUS_REWARD_AMOUNT = 4000;
+const STREAK_CYCLE_LENGTH = 7;
+const STREAK_BREAK_CLAIM_THRESHOLD_MS = 2 * DAILY_STREAK_INTERVAL_MS;
+const STREAK_BREAK_MINING_THRESHOLD_MS = 36 * 60 * 60 * 1000;
+
+app.post('/rewards/daily-streak/claim', authMiddleware, async (req, res) => {
+  try {
+    const userEmail = req.userEmail;
+    const now = Date.now();
+    let user = await User.findOne({ email: userEmail });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.lastStreakClaimAt && user.dailyStreak === 0) {
+      console.log(`New user ${userEmail} detected. Setting dailyStreak to 1.`);
+      user.dailyStreak = 1; // Fix for new users with old schema default
+    }
+
+    // --- Cooldown Check ---
+    const lastClaimAt = user.lastStreakClaimAt ? user.lastStreakClaimAt.getTime() : 0;
+    const earliestNextClaimTime = lastClaimAt + DAILY_STREAK_INTERVAL_MS;
+
+    if (now < earliestNextClaimTime) {
+      return res.status(409).json({
+        message: 'Daily streak reward not ready yet.',
+        remainingMs: earliestNextClaimTime - now,
+        nextAvailableAt: earliestNextClaimTime,
+      });
+    }
+
+    // --- Determine last mining activity time ---
+    let lastMiningActivityTime = 0;
+    if (user.mining) {
+      lastMiningActivityTime = Math.max(
+        user.mining.lastUpdatedMs || 0,
+        user.mining.endTimeMs || 0
+      );
+    }
+
+    // --- Streak Break Check ---
+    let isStreakBroken = false;
+    if (user.dailyStreak > 1 && lastClaimAt > 0) { // Only if on Day 2+
+      const hasMissedClaimWindow = (now - lastClaimAt) > STREAK_BREAK_CLAIM_THRESHOLD_MS;
+      const hasMissedMiningWindow = lastMiningActivityTime > 0 && 
+        (now - lastMiningActivityTime) > STREAK_BREAK_MINING_THRESHOLD_MS;
+
+      if (hasMissedClaimWindow || hasMissedMiningWindow) {
+        isStreakBroken = true;
+        console.log(`Streak broken for ${userEmail}. Resetting to Day 1.`);
+        user.dailyStreak = 1; // Reset to Day 1, NOT bonus
+      }
+    }
+
+    // --- Calculate Reward ---
+    let rewardCoins;
+    let nextStreakDayToSet;
+    const currentDay = user.dailyStreak;
+
+    if (currentDay >= 1 && currentDay <= STREAK_CYCLE_LENGTH) {
+      // Regular days 1-7
+      rewardCoins = REGULAR_DAILY_REWARDS[currentDay - 1];
+      nextStreakDayToSet = currentDay + 1;
+      
+      // After Day 7, move to bonus (represented as 8)
+      if (nextStreakDayToSet > STREAK_CYCLE_LENGTH) {
+        nextStreakDayToSet = 8; // Bonus day
+      }
+    } else if (currentDay === 8 || currentDay === 0) {
+      // Bonus day (after Day 7, or legacy value of 0)
+      rewardCoins = BONUS_REWARD_AMOUNT;
+      nextStreakDayToSet = 1; // Back to Day 1
+    } else {
+      // Fallback for unexpected values
+      console.warn(`Unexpected dailyStreak value: ${currentDay}. Resetting to Day 1.`);
+      rewardCoins = REGULAR_DAILY_REWARDS[0]; // 100 coins
+      nextStreakDayToSet = 2;
+    }
+
+    // --- Update user document ---
+    user.coinsBalance += rewardCoins;
+    user.totalCoinsEarned += rewardCoins;
+    user.dailyStreak = nextStreakDayToSet;
+    user.lastStreakClaimAt = new Date(now);
+
+    // Transaction record
+    const claimedDayText = currentDay === 8 || currentDay === 0 
+      ? 'Bonus' 
+      : `Day ${currentDay}`;
+
+    user.transactions.push({
+      type: 'daily_bonus',
+      amountBtc: 0,
+      amountCoins: rewardCoins,
+      note: `Daily streak reward - ${claimedDayText} (${rewardCoins} coins)`,
+      createdAt: new Date(now),
+    });
+
+    await user.save();
+
+    console.log(`✅ Daily streak claimed by ${userEmail}: ${claimedDayText} = ${rewardCoins} coins. Next: Day ${nextStreakDayToSet === 8 ? 'Bonus' : nextStreakDayToSet}`);
+
+    return res.status(200).json({
+      rewardCoins,
+      currentDailyStreak: user.dailyStreak,
+      lastStreakClaimAt: user.lastStreakClaimAt.getTime(),
+      nextAvailableAt: now + DAILY_STREAK_INTERVAL_MS,
+      message: 'Daily streak reward claimed successfully!',
+      user: user.toJSON(),
+    });
+
+  } catch (err) {
+    console.error('POST /rewards/daily-streak/claim error', err);
+    return res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+
 // status
 app.get('/status', async (req, res) => {
   const user = await User.findById(req.user.id);
